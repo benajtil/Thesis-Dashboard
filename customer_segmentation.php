@@ -11,7 +11,7 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// Initialize Segments
+// Initialize Customer Segments
 $customerSegments = [
     "Dormant Customers" => [],
     "High Spender Customers" => [],
@@ -25,15 +25,17 @@ $customerSegments = [
     "Low-Value Repeat Customers" => []
 ];
 
-// Fetch aggregated data per country
-$result = $conn->query("SELECT country, 
-                        SUM(total_price) AS total_spent, 
-                        COUNT(DISTINCT invoice_no) AS total_orders, 
-                        MAX(invoice_date) AS last_order_date,
-                        AVG(quantity) AS avg_order_quantity,
-                        DATE_FORMAT(invoice_date, '%M') AS order_month
-                        FROM transactions 
-                        GROUP BY country ORDER BY total_spent DESC");
+$result = $conn->query("
+    SELECT country, 
+           SUM(total_price) AS total_spent, 
+           COUNT(DISTINCT invoice_no) AS total_orders, 
+           MAX(invoice_date) AS last_order_date,
+           AVG(quantity) AS avg_order_quantity,
+           DATE_FORMAT(invoice_date, '%M') AS order_month
+    FROM transactions 
+    GROUP BY country 
+    ORDER BY total_spent DESC 
+    LIMIT 10");
 
 $today = date("Y-m-d");
 $sixMonthsAgo = date("Y-m-d", strtotime("-6 months"));
@@ -57,7 +59,7 @@ while ($row = $result->fetch_assoc()) {
         $customerSegments["High Spender Customers"][$country] = $totalSpent;
     }
     if ($totalOrders > 100) {
-        $customerSegments["Loyal Customers"][$country] = $totalOrders;  // Now using total orders
+        $customerSegments["Loyal Customers"][$country] = $totalOrders;
     }
     if ($lastOrderDate < $sixMonthsAgo && $totalOrders > 0) {
         if ($lastOrderFormatted !== null) {
@@ -71,10 +73,13 @@ while ($row = $result->fetch_assoc()) {
         $customerSegments["New Customers"][$country] = $totalSpent;
     }
     if ($avgOrderQuantity > 50) {
-        $customerSegments["Bulk Buyers"][$country] = $avgOrderQuantity;  // Display avg order quantity
+        $customerSegments["Bulk Buyers"][$country] = $avgOrderQuantity;
+    }
+    if ($totalSpent > 200 && $totalOrders == 1) {
+        $customerSegments["One-Time High Spenders"][$country] = $totalSpent;
     }
     if (!empty($orderMonth)) {
-        $customerSegments["Seasonal Buyers"][$country] = $orderMonth;  // Display most common order month
+        $customerSegments["Seasonal Buyers"][$country] = $orderMonth;
     }
     if ($totalOrders > 10 && $totalSpent < 500) {
         $customerSegments["Low-Value Repeat Customers"][$country] = $totalSpent;
@@ -100,6 +105,7 @@ $conn->close();
     </style>
 </head>
 <body>
+
 <div class="container dashboard-container">
     <h2 class="text-center my-4">Customer Segments</h2>
     <div class="row">
@@ -135,6 +141,7 @@ $conn->close();
         <canvas id="customerSegmentChart"></canvas>
     </div>
 </div>
+
 <script>
     document.addEventListener("DOMContentLoaded", function() {
         var segmentData = <?php echo json_encode(array_map("count", $customerSegments)); ?>;
