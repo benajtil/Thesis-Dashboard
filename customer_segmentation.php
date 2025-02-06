@@ -1,6 +1,5 @@
 <?php
 include 'includes/country.php';
-
 $servername = "localhost";
 $username = "root";
 $password = "";
@@ -11,7 +10,6 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// Initialize Customer Segments
 $customerSegments = [
     "Dormant Customers" => [],
     "High Spender Customers" => [],
@@ -26,16 +24,10 @@ $customerSegments = [
 ];
 
 $result = $conn->query("
-    SELECT country, 
-           SUM(total_price) AS total_spent, 
-           COUNT(DISTINCT invoice_no) AS total_orders, 
-           MAX(invoice_date) AS last_order_date,
-           AVG(quantity) AS avg_order_quantity,
-           DATE_FORMAT(invoice_date, '%M') AS order_month
-    FROM transactions 
-    GROUP BY country 
-    ORDER BY total_spent DESC 
-    LIMIT 10");
+    SELECT country, SUM(total_price) AS total_spent, COUNT(DISTINCT invoice_no) AS total_orders, 
+           MAX(invoice_date) AS last_order_date, AVG(quantity) AS avg_order_quantity,
+           DATE_FORMAT(invoice_date, '%M') AS order_month 
+    FROM transactions GROUP BY country ORDER BY total_spent DESC LIMIT 10");
 
 $today = date("Y-m-d");
 $sixMonthsAgo = date("Y-m-d", strtotime("-6 months"));
@@ -48,10 +40,8 @@ while ($row = $result->fetch_assoc()) {
     $lastOrderDate = $row["last_order_date"];
     $avgOrderQuantity = round($row["avg_order_quantity"], 2);
     $orderMonth = $row["order_month"];
-
     $lastOrderFormatted = ($lastOrderDate == "0000-00-00" || empty($lastOrderDate)) ? null : date("F Y", strtotime($lastOrderDate));
 
-    // Assign Customers to Segments
     if ($totalOrders == 1) {
         $customerSegments["Dormant Customers"][$country] = $totalSpent;
     }
@@ -63,10 +53,7 @@ while ($row = $result->fetch_assoc()) {
     }
     if ($lastOrderDate < $sixMonthsAgo && $totalOrders > 0) {
         if ($lastOrderFormatted !== null) {
-            $customerSegments["Churn Risk Customers"][$country] = [
-                "total_orders" => $totalOrders,
-                "last_order" => $lastOrderFormatted
-            ];
+            $customerSegments["Churn Risk Customers"][$country] = ["total_orders" => $totalOrders, "last_order" => $lastOrderFormatted];
         }
     }
     if ($lastOrderDate > $oneMonthAgo && $totalOrders == 1) {
@@ -85,7 +72,6 @@ while ($row = $result->fetch_assoc()) {
         $customerSegments["Low-Value Repeat Customers"][$country] = $totalSpent;
     }
 }
-
 $conn->close();
 ?>
 
@@ -97,28 +83,21 @@ $conn->close();
     <title>Customer Segmentation Dashboard</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { background: #f4f6f9; font-family: Arial, sans-serif; }
-        .dashboard-container { max-width: 1200px; margin: auto; padding: 20px; }
-        .card { box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.1); padding: 20px; text-align: center; margin-bottom: 15px; }
-        .segment-title { font-size: 1.2em; font-weight: bold; margin-bottom: 10px; }
-    </style>
 </head>
 <body>
-
-<div class="container dashboard-container">
-    <h2 class="text-center my-4">Customer Segments</h2>
+<div class="container mt-4">
+    <h2 class="text-center">Customer Segments</h2>
     <div class="row">
         <?php foreach ($customerSegments as $segment => $countries): ?>
             <div class="col-md-4">
-                <div class="card">
-                    <h5 class="segment-title"> <?php echo $segment; ?> </h5>
-                    <ul style="list-style: none; padding: 0;">
-                        <?php foreach ($countries as $country => $value): ?>
-                            <li><?php echo $country; ?> - 
-                                <b>
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h5 class="card-title"> <?php echo $segment; ?> </h5>
+                        <ul class="list-unstyled">
+                            <?php foreach ($countries as $country => $value): ?>
+                                <li><?php echo $country; ?> - <b>
                                     <?php if ($segment == "Bulk Buyers") {
-                                        echo $value . " units per order"; 
+                                        echo $value . " units per order";
                                     } elseif ($segment == "Seasonal Buyers") {
                                         echo "Mostly orders in " . $value;
                                     } elseif ($segment == "Churn Risk Customers") {
@@ -128,10 +107,10 @@ $conn->close();
                                     } else {
                                         echo "$" . number_format($value, 2);
                                     } ?>
-                                </b>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
+                                </b></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
                 </div>
             </div>
         <?php endforeach; ?>
@@ -146,7 +125,6 @@ $conn->close();
     document.addEventListener("DOMContentLoaded", function() {
         var segmentData = <?php echo json_encode(array_map("count", $customerSegments)); ?>;
         var segmentLabels = <?php echo json_encode(array_keys($customerSegments)); ?>;
-
         var ctx = document.getElementById("customerSegmentChart").getContext("2d");
         new Chart(ctx, {
             type: "bar",
