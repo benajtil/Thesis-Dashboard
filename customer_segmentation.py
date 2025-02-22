@@ -57,14 +57,14 @@ cursor.execute("""
 
 # ✅ Fetch Customer Data from Cleaned Transactions
 cursor.execute("""
-    SELECT customer_id, country, MIN(invoice_date) AS first_purchase, 
+    SELECT customer_id, MIN(invoice_date) AS first_purchase, 
            MAX(invoice_date) AS last_purchase, COUNT(DISTINCT invoice_no) AS frequency, 
-           SUM(total_price) AS monetary 
-    FROM cleaned_transactions GROUP BY customer_id, country
+           SUM(quantity * unit_price) AS monetary 
+    FROM cleaned_transactions GROUP BY customer_id
 """)
 data = cursor.fetchall()
 
-columns = ["customer_id", "country", "first_purchase", "last_purchase", "frequency", "monetary"]
+columns = ["customer_id", "first_purchase", "last_purchase", "frequency", "monetary"]
 df = pd.DataFrame(data, columns=columns)
 
 # ✅ Convert Data Types
@@ -83,30 +83,40 @@ df["periodicity"] = df.apply(lambda row: row["length"] / row["frequency"] if row
 
 df.dropna(inplace=True)
 
-# ✅ Compute RFM & LRFMP Quantiles for Scoring
-rfm_quantiles = df[["recency", "frequency", "monetary"]].quantile(q=[0.25, 0.5, 0.75]).to_dict()
-lrfmp_quantiles = df[["length", "recency", "frequency", "monetary", "periodicity"]].quantile(q=[0.25, 0.5, 0.75]).to_dict()
+# ✅ Compute RFM & LRFMP Quantiles for Scoring (Recomputed from Non-Null Data)
+rfm_quantiles = df[["recency", "frequency", "monetary"]].quantile(q=[0.25, 0.5, 0.75])
+lrfmp_quantiles = df[["length", "recency", "frequency", "monetary", "periodicity"]].quantile(q=[0.25, 0.5, 0.75])
 
-# ✅ Scoring Functions
-def Score(x, p, d, reverse=False):
-    if reverse:
-        if x <= d[p][0.25]: return 4
-        elif x <= d[p][0.5]: return 3
-        elif x <= d[p][0.75]: return 2
-        else: return 1
-    else:
-        if x <= d[p][0.25]: return 1
-        elif x <= d[p][0.5]: return 2
-        elif x <= d[p][0.75]: return 3
-        else: return 4
+# ✅ Debug Quantiles
+print("🔍 RFM Quantiles:\n", rfm_quantiles)
+print("🔍 LRFMP Quantiles:\n", lrfmp_quantiles)
 
-# ✅ Assign Scores for RFM & LRFMP
-df["R"] = df["recency"].apply(Score, args=("recency", rfm_quantiles, True))
-df["F"] = df["frequency"].apply(Score, args=("frequency", rfm_quantiles, False))
-df["M"] = df["monetary"].apply(Score, args=("monetary", rfm_quantiles, False))
+# ✅ Function for Recency: Lower is better (More recent → Higher score)
+def RScore(x, p, d):
+    if x <= d[p][0.25]: return 4
+    elif x <= d[p][0.5]: return 3
+    elif x <= d[p][0.75]: return 2
+    else: return 1
 
-df["L"] = df["length"].apply(Score, args=("length", lrfmp_quantiles, False))
-df["P"] = df["periodicity"].apply(Score, args=("periodicity", lrfmp_quantiles, False))
+# ✅ Function for Frequency & Monetary: Higher is better (More frequent → Higher score)
+def FnMScore(x, p, d):
+    if x <= d[p][0.25]: return 1  # Very low frequency or spending
+    elif x <= d[p][0.5]: return 2
+    elif x <= d[p][0.75]: return 3
+    else: return 4  # High frequency or spending
+
+
+
+
+# Assign Corrected Scores
+# ✅ Apply scoring to RFM
+df["R"] = df["recency"].apply(RScore, args=("recency", rfm_quantiles.to_dict()))
+df["F"] = df["frequency"].apply(FnMScore, args=("frequency", rfm_quantiles.to_dict()))
+df["M"] = df["monetary"].apply(FnMScore, args=("monetary", rfm_quantiles.to_dict()))
+
+# ✅ Apply scoring to LRFMP
+df["L"] = df["length"].apply(FnMScore, args=("length", lrfmp_quantiles,))
+df["P"] = df["periodicity"].apply(FnMScore, args=("periodicity", lrfmp_quantiles,))
 
 df["RFMGroup"] = df.apply(lambda row: f"{row['R']}{row['F']}{row['M']}", axis=1)
 df["RFMScore"] = df[["R", "F", "M"]].sum(axis=1)
@@ -114,33 +124,17 @@ df["RFMScore"] = df[["R", "F", "M"]].sum(axis=1)
 df["LRFMPGroup"] = df.apply(lambda row: f"{row['L']}{row['R']}{row['F']}{row['M']}{row['P']}", axis=1)
 df["LRFMPScore"] = df[["L", "R", "F", "M", "P"]].sum(axis=1)
 
-# ✅ Optimize DBSCAN eps
-eps_values = np.arange(0.2, 5.0, 0.2)
-min_samples_values = [3, 5, 7, 10]
 
-results = {}
+# ✅ Log Transform for Scaling
+df["Recency_log"] = np.log(df["recency"] + 1)
+df["Frequency_log"] = np.log(df["frequency"] + 1)
+df["Monetary_log"] = np.log(df["monetary"] + 1)
+df["Periodicity_log"] = np.log(df["periodicity"] + 1)
+
+# ✅ Standardize Data
 scaler = StandardScaler()
-X_rfm = scaler.fit_transform(df[["recency", "frequency", "monetary"]])
-
-for min_samples in min_samples_values:
-    cluster_counts = []
-    for eps in eps_values:
-        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        clusters = dbscan.fit_predict(X_rfm)
-        n_clusters = len(set(clusters)) - (1 if -1 in clusters else 0)
-        cluster_counts.append(n_clusters)
-    results[min_samples] = cluster_counts
-
-# ✅ Plot eps optimization
-plt.figure(figsize=(10, 6))
-for min_samples, clusters in results.items():
-    plt.plot(eps_values, clusters, marker='o', linestyle='-', label=f'min_samples={min_samples}')
-plt.xlabel("Epsilon (eps)")
-plt.ylabel("Number of Clusters")
-plt.title("Optimizing `eps` for DBSCAN")
-plt.legend()
-plt.grid()
-plt.show()
+X_rfm = scaler.fit_transform(df[["Recency_log", "Frequency_log", "Monetary_log"]])
+X_lrfmp = scaler.fit_transform(df[["length", "Recency_log", "Frequency_log", "Monetary_log", "Periodicity_log"]])
 
 # ✅ Apply DBSCAN with Optimized Parameters
 best_eps = 1.2  
@@ -150,9 +144,11 @@ dbscan_rfm = DBSCAN(eps=best_eps, min_samples=best_min_samples)
 dbscan_lrfmp = DBSCAN(eps=best_eps + 0.3, min_samples=best_min_samples)  
 
 df["RFMCluster"] = dbscan_rfm.fit_predict(X_rfm)
-
-X_lrfmp = scaler.fit_transform(df[["length", "recency", "frequency", "monetary", "periodicity"]])
 df["LRFMPCluster"] = dbscan_lrfmp.fit_predict(X_lrfmp)
+
+# ✅ Replace Noise (-1) with "Noise" Label
+df["RFMCluster"] = df["RFMCluster"].apply(lambda x: "Noise" if x == -1 else x)
+df["LRFMPCluster"] = df["LRFMPCluster"].apply(lambda x: "Noise" if x == -1 else x)
 
 # ✅ Store Data in MySQL
 cursor.execute("DELETE FROM customer_rfm_analysis")
@@ -160,13 +156,13 @@ cursor.execute("DELETE FROM customer_lrfmp_analysis")
 
 for _, row in df.iterrows():
     cursor.execute("""
-        REPLACE INTO customer_rfm_analysis 
+        INSERT INTO customer_rfm_analysis 
         (CustomerID, Recency, Frequency, Monetary, R, F, M, RFMGroup, RFMScore, Cluster)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (row.customer_id, row.recency, row.frequency, row.monetary, row.R, row.F, row.M, row.RFMGroup, row.RFMScore, row.RFMCluster))
 
     cursor.execute("""
-        REPLACE INTO customer_lrfmp_analysis 
+        INSERT INTO customer_lrfmp_analysis 
         (CustomerID, Length, Recency, Frequency, Monetary, Periodicity, 
          L, R, F, M, P, LRFMPGroup, LRFMPScore, Cluster)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -176,4 +172,4 @@ for _, row in df.iterrows():
 conn.commit()
 cursor.close()
 conn.close()
-print("✅ RFM & LRFMP Analysis Completed & Saved to MySQL")
+print("✅ RFM & LRFMP Analysis with DBSCAN Completed!")

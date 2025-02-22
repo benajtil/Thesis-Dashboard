@@ -11,70 +11,87 @@ if ($conn->connect_error) {
 
 $message = "";
 
-
+// ✅ Handle File Upload
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (isset($_POST['confirm_delete']) && $_POST['confirm_delete'] == 'yes') {
         $conn->query("DELETE FROM transactions");
     }
 
+    // ✅ Check if file is uploaded
     if (isset($_FILES["csvFile"]["tmp_name"]) && $_FILES["csvFile"]["size"] > 0) {
-        $file = fopen($_FILES["csvFile"]["tmp_name"], "r");
-        fgetcsv($file); 
+        $file = $_FILES["csvFile"]["tmp_name"];
+        $fileType = mime_content_type($file);
 
-        $insertedRows = 0;
-        $batchSize = 1000;
-        $values = [];
+        // ✅ Validate file type
+        if ($fileType !== "text/plain" && $fileType !== "text/csv" && $fileType !== "application/vnd.ms-excel") {
+            $message = "<div class='alert alert-danger'>⚠️ Invalid file type. Please upload a CSV file.</div>";
+        } else {
+            $handle = fopen($file, "r");
+            fgetcsv($handle); // Skip the first row (headers)
 
-        while (($row = fgetcsv($file, 10000, ",")) !== FALSE) {
-            if (count($row) < 8) {
-                continue; 
-            }
+            $insertedRows = 0;
+            $batchSize = 1000;
+            $values = [];
 
+            while (($row = fgetcsv($handle, 10000, ",")) !== FALSE) {
+                if (count($row) < 8) continue; // Skip incomplete rows
 
-            $invoice_no = $conn->real_escape_string($row[0]);
-            $customer_id = intval($row[6]);  
-            $product_name = trim($conn->real_escape_string($row[2]));
-            $quantity = intval($row[3]);
-            $unit_price = floatval($row[4]);
-            $total_price = floatval($row[5]);
-            $raw_date = trim($row[4]);  
-            $country = $conn->real_escape_string($row[7]);
+                // ✅ Map columns correctly
+                $invoice_no = $conn->real_escape_string($row[0]);
+                $customer_id = intval($row[6]);
+                $product_name = trim($conn->real_escape_string($row[2]));
+                $quantity = intval($row[3]);
+                $unit_price = floatval($row[5]); // ✅ Ensure correct column for unit price
+                $total_price = $quantity * $unit_price; // ✅ Calculate dynamically
+                $raw_date = trim($row[4]); // ✅ Ensure correct date column
+                $country = $conn->real_escape_string($row[7]);
 
+                // ✅ Convert date format
+                $dateObj = DateTime::createFromFormat("m/d/Y", $raw_date);
+                $invoice_date = $dateObj ? $dateObj->format("Y-m-d") : "1970-01-01";
 
-            $dateObj = DateTime::createFromFormat("m/d/Y", $raw_date);
-            $invoice_date = $dateObj ? $dateObj->format("Y-m-d") : "1970-01-01";
+                // ✅ Clean Data if requested
+                if (isset($_POST['clean_data']) && $_POST['clean_data'] == 'yes') {
+                    if (empty($product_name) || $quantity <= 0 || $unit_price < 0) continue;
+                }
 
+                $values[] = "('$invoice_no', $customer_id, '$product_name', $quantity, $unit_price, $total_price, '$invoice_date', '$country')";
 
-            if (isset($_POST['clean_data']) && $_POST['clean_data'] == 'yes') {
-                if (empty($product_name) || $quantity <= 0 || $unit_price < 0) {
-                    continue;
+                if (count($values) >= $batchSize) {
+                    $sql = "INSERT INTO transactions (invoice_no, customer_id, product_name, quantity, unit_price, total_price, invoice_date, country) 
+                            VALUES " . implode(",", $values) . "
+                            ON DUPLICATE KEY UPDATE 
+                            quantity=VALUES(quantity), 
+                            unit_price=VALUES(unit_price), 
+                            total_price=VALUES(total_price), 
+                            invoice_date=VALUES(invoice_date), 
+                            country=VALUES(country)";
+
+                    if ($conn->query($sql)) {
+                        $insertedRows += count($values);
+                    }
+                    $values = [];
                 }
             }
 
-            $values[] = "('$invoice_no', $customer_id, '$product_name', $quantity, $unit_price, $total_price, '$invoice_date', '$country')";
-
-
-            if (count($values) >= $batchSize) {
+            // ✅ Insert remaining records
+            if (!empty($values)) {
                 $sql = "INSERT INTO transactions (invoice_no, customer_id, product_name, quantity, unit_price, total_price, invoice_date, country) 
-                        VALUES " . implode(",", $values);
-
+                        VALUES " . implode(",", $values) . "
+                        ON DUPLICATE KEY UPDATE 
+                        quantity=VALUES(quantity), 
+                        unit_price=VALUES(unit_price), 
+                        total_price=VALUES(total_price), 
+                        invoice_date=VALUES(invoice_date), 
+                        country=VALUES(country)";
                 if ($conn->query($sql)) {
                     $insertedRows += count($values);
                 }
-                $values = []; 
             }
-        }
 
-        if (!empty($values)) {
-            $sql = "INSERT INTO transactions (invoice_no, customer_id, product_name, quantity, unit_price, total_price, invoice_date, country) 
-                    VALUES " . implode(",", $values);
-            if ($conn->query($sql)) {
-                $insertedRows += count($values);
-            }
+            fclose($handle);
+            $message = "<div class='alert alert-success'>✅ CSV file imported successfully! Rows Inserted: $insertedRows</div>";
         }
-
-        fclose($file);
-        $message = "<div class='alert alert-success'>✅ CSV file imported successfully! Rows Inserted: $insertedRows</div>";
     } else {
         $message = "<div class='alert alert-danger'>⚠️ No file uploaded or invalid file.</div>";
     }
