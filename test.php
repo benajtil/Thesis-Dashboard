@@ -1,233 +1,335 @@
 <?php
 $servername = "localhost";
-$username = "root";
-$password = "";
-$dbname = "retail_db";
+$username   = "root";
+$password   = "";
+$dbname     = "retail_db";
 
 $conn = new mysqli($servername, $username, $password, $dbname);
 if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// ✅ Fetch Available Countries for Dropdown
-$country_query = "SELECT DISTINCT country FROM cleaned_transactions ORDER BY country ASC";
+$country_query = "SELECT DISTINCT country FROM transactions ORDER BY country ASC";
 $country_result = $conn->query($country_query);
 
-// ✅ Handle Country and CustomerID Filtering
-$country_filter = "";
-$search_query = "";
+$segmentation = isset($_GET['segmentation']) ? $_GET['segmentation'] : 'rfm';
+$combination  = isset($_GET['combination']) ? $_GET['combination'] : 'full';
+$search       = isset($_GET['search']) ? $_GET['search'] : "";
+
+$rfmOptions = [
+    "full" => ["clusterCol" => "KMeans_RFM_Cluster", "flagCol" => "DBSCAN_RFM_Flag"],
+    "rf"   => ["clusterCol" => "KMeans_RF_Cluster",  "flagCol" => "DBSCAN_RF_Flag"],
+    "rm"   => ["clusterCol" => "KMeans_RM_Cluster",  "flagCol" => "DBSCAN_RM_Flag"],
+    "fm"   => ["clusterCol" => "KMeans_FM_Cluster",  "flagCol" => "DBSCAN_FM_Flag"]
+];
+
+$lrfmpOptions = [
+    "full" => ["clusterCol" => "KMeans_LRFMP_Cluster", "flagCol" => "DBSCAN_LRFMP_Flag"],
+    "lr"   => ["clusterCol" => "KMeans_LR_Cluster",    "flagCol" => "DBSCAN_LR_Flag"],
+    "lf"   => ["clusterCol" => "KMeans_LF_Cluster",    "flagCol" => "DBSCAN_LF_Flag"],
+    "lm"   => ["clusterCol" => "KMeans_LM_Cluster",    "flagCol" => "DBSCAN_LM_Flag"],
+    "fp"   => ["clusterCol" => "KMeans_FP_Cluster",    "flagCol" => "DBSCAN_FP_Flag"],
+    "mp"   => ["clusterCol" => "KMeans_MP_Cluster",    "flagCol" => "DBSCAN_MP_Flag"]
+];
+
+if ($segmentation == 'rfm') {
+    $table = "customer_rfm_kmeans_dbscan";
+    $options = $rfmOptions;
+} else {
+    $table = "customer_lrfmp_kmeans_dbscan";
+    $options = $lrfmpOptions;
+}
+
+if (!isset($options[$combination])) {
+    $combination = 'full';
+}
+
+$clusterCol = $options[$combination]["clusterCol"];
+$flagCol    = $options[$combination]["flagCol"];
+
 $selected_country = "";
-
-if (isset($_GET['country']) && !empty($_GET['country'])) {
-    $selected_country = $_GET['country'];
-    $country_filter = " AND c.country = '$selected_country'";  // ✅ Join `cleaned_transactions`
+if (!empty($_GET['country'])) {
+    $selected_country = $conn->real_escape_string($_GET['country']);
+    $country_filter = " AND Country = '$selected_country'";
+} else {
+    $country_filter = "";
 }
 
-if (isset($_GET['search']) && !empty($_GET['search'])) {
-    $search_customer = $_GET['search'];
-    $search_query = " AND r.CustomerID = '$search_customer'";
+$search_filter = "";
+if (!empty($search)) {
+    $search = $conn->real_escape_string($search);
+    $search_filter = " AND CustomerID = '$search'";
 }
 
-// ✅ Fetch Top 10 Customers in Selected Country or Search Result
-$sql = "
-    SELECT r.*, l.LRFMPGroup, l.LRFMPScore, l.L, l.P, l.Cluster, c.country
-    FROM customer_rfm_analysis r
-    JOIN customer_lrfmp_analysis l ON r.CustomerID = l.CustomerID
-    JOIN cleaned_transactions c ON r.CustomerID = c.customer_id  -- ✅ JOIN instead of WHERE
-    WHERE 1=1 $country_filter $search_query
-    GROUP BY r.CustomerID
-    ORDER BY r.RFMScore DESC
-    LIMIT 10
-";
+$sort_column = isset($_GET['sort']) ? $_GET['sort'] : "CustomerID";
+$sort_order  = (isset($_GET['order']) && $_GET['order'] == "asc") ? "ASC" : "DESC";
+$limit = 10;
 
+$sql = "SELECT * FROM $table WHERE 1=1 $country_filter $search_filter ORDER BY $sort_column $sort_order LIMIT $limit";
 $result = $conn->query($sql);
-
-// ✅ Fetch Cluster Averages for Interpretation (JOIN Fix)
-$cluster_sql = "
-    SELECT r.Cluster, 
-           ROUND(AVG(r.Recency), 2) AS AvgRecency, 
-           ROUND(AVG(r.Frequency), 2) AS AvgFrequency, 
-           ROUND(AVG(r.Monetary), 2) AS AvgMonetary
-    FROM customer_rfm_analysis r
-    JOIN cleaned_transactions c ON r.CustomerID = c.customer_id  -- ✅ JOIN instead of WHERE
-    WHERE r.Cluster != -1 $country_filter
-    GROUP BY r.Cluster
-";
-
-$cluster_result = $conn->query($cluster_sql);
-$cluster_data = [];
-while ($row = $cluster_result->fetch_assoc()) {
-    $cluster_data[$row['Cluster']] = $row;
-}
-
 ?>
-
+<?php include 'includes/navbar.php' ?>
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Customer Segmentation</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <title>Customer Segmentation Dashboard</title>
+    <!-- Bootstrap Dark Theme & Fonts -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
+    <style>
+        /* Dark Minimalistic Theme */
+        body {
+            background-color: #181B23;
+            color: #E2E8F0;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        a, a:hover, a:focus, a:active {
+            text-decoration: none;
+            color: inherit;
+        }
+        /* Navbar Styling */
+        .navbar {
+            background-color: #1F2029;
+            border-bottom: 1px solid #2D2F36;
+        }
+        .navbar-brand, .nav-link {
+            color: #E2E8F0 !important;
+        }
+        .nav-link:hover {
+            color: #63B3ED !important;
+        }
+        /* Dashboard Container */
+        .dashboard-container {
+            max-width: 1200px;
+            margin: auto;
+            padding: 20px;
+        }
+        /* Card Style */
+        .card {
+            background-color: #1F2029;
+            border: none;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        /* Table Styling */
+        .table-dark th, .table-dark td {
+            border-color: #2D2F36;
+        }
+        .table-hover tbody tr:hover {
+            background-color: #2D2F36;
+        }
+        /* Modal Styling */
+        .modal-content {
+            background-color: #1F2029;
+            color: #E2E8F0;
+            border: none;
+        }
+        .modal-header, .modal-footer {
+            border: none;
+        }
+    </style>
 </head>
-
 <body>
-
-    <div class="container mt-4">
-        <h2 class="mb-3">Customer Segmentation</h2>
-
-        <!-- ✅ Country Filter Dropdown -->
-        <form method="GET" class="mb-3">
-            <label>Select Country:</label>
-            <select name="country" class="form-select w-25 d-inline">
-                <option value="">All</option>
-                <?php while ($row = $country_result->fetch_assoc()) { ?>
-                    <option value="<?php echo $row['country']; ?>"
-                        <?php if ($selected_country == $row['country']) echo 'selected'; ?>>
-                        <?php echo $row['country']; ?>
-                    </option>
-                <?php } ?>
-            </select>
-
-            <!-- ✅ Search Form -->
-            <input type="text" name="search" class="form-control w-25 d-inline"
-                placeholder="Search by Customer ID" value="<?php echo isset($_GET['search']) ? $_GET['search'] : ''; ?>">
-            <button type="submit" class="btn btn-primary">Filter</button>
-        </form>
-
-        <!-- ✅ RFM Table -->
-        <h4>RFM Analysis</h4>
-        <table class="table table-bordered">
-            <thead>
-                <tr>
-                    <th>CustomerID</th>
-                    <th>Recency</th>
-                    <th>Frequency</th>
-                    <th>Monetary</th>
-                    <th>RFM Group</th>
-                    <th>RFM Score</th>
-                    <th>Cluster</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php while ($row = $result->fetch_assoc()) { ?>
-                    <tr>
-                        <td><?php echo $row['CustomerID']; ?></td>
-                        <td><?php echo $row['Recency']; ?></td>
-                        <td><?php echo $row['Frequency']; ?></td>
-                        <td><?php echo number_format($row['Monetary'], 2); ?></td>
-                        <td><?php echo $row['RFMGroup']; ?></td>
-                        <td><?php echo $row['RFMScore']; ?></td>
-                        <td><?php echo ($row['Cluster'] == -1) ? "Noise" : $row['Cluster']; ?></td>
-                    </tr>
-                <?php } ?>
-            </tbody>
-        </table>
-
-        <!-- ✅ LRFMP Table -->
-        <h4>LRFMP Analysis</h4>
-        <table class="table table-bordered">
-            <thead>
-                <tr>
-                    <th>CustomerID</th>
-                    <th>Length</th>
-                    <th>Recency</th>
-                    <th>Frequency</th>
-                    <th>Monetary</th>
-                    <th>Periodicity</th>
-                    <th>LRFMP Group</th>
-                    <th>LRFMP Score</th>
-                    <th>Cluster</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php
-                $result->data_seek(0); // Reset pointer to reuse the query
-                while ($row = $result->fetch_assoc()) { ?>
-                    <tr>
-                        <td><?php echo $row['CustomerID']; ?></td>
-                        <td><?php echo $row['L']; ?></td>
-                        <td><?php echo $row['Recency']; ?></td>
-                        <td><?php echo $row['Frequency']; ?></td>
-                        <td><?php echo number_format($row['Monetary'], 2); ?></td>
-                        <td><?php echo number_format($row['P'], 2); ?></td>
-                        <td><?php echo $row['LRFMPGroup']; ?></td>
-                        <td><?php echo $row['LRFMPScore']; ?></td>
-                        <td><?php echo ($row['Cluster'] == -1) ? "Noise" : $row['Cluster']; ?></td>
-                    </tr>
-                <?php } ?>
-            </tbody>
-        </table>
-
-        <!-- ✅ Cluster Interpretations -->
-        <h4>RFM Cluster Interpretations</h4>
-        <?php foreach ($cluster_data as $cluster => $data) { ?>
-            <div class="card mb-3">
-                <div class="card-body">
-                    <h5>Cluster <?php echo $cluster; ?> (RFM)</h5>
-                    <p><strong>Recency (Avg):</strong> <?php echo $data['AvgRecency']; ?> days</p>
-                    <p><strong>Frequency (Avg):</strong> <?php echo $data['AvgFrequency']; ?> transactions</p>
-                    <p><strong>Monetary (Avg):</strong> $<?php echo number_format($data['AvgMonetary'], 2); ?></p>
-
-                    <p><strong>Interpretation:</strong>
-                        <?php
-                        if ($data['AvgRecency'] > 150 && $data['AvgFrequency'] < 20 && $data['AvgMonetary'] < 500) {
-                            echo "🛑 Customers in this cluster are likely 'At-Risk' or 'Lapsed' customers. They haven’t purchased recently, buy infrequently, and spend little. A re-engagement campaign may help.";
-                        } elseif ($data['AvgRecency'] < 30 && $data['AvgFrequency'] > 200 && $data['AvgMonetary'] > 5000) {
-                            echo "⭐ This cluster represents your 'Champions' or 'Loyal' customers. They shop frequently, spend a lot, and are highly engaged.";
-                        } elseif ($data['AvgRecency'] > 60 && $data['AvgFrequency'] > 50 && $data['AvgMonetary'] > 1000) {
-                            echo "🚀 These customers are 'Potential Loyalists'. They buy frequently and spend well, but may need incentives to keep them engaged.";
-                        } elseif ($data['AvgRecency'] < 45 && $data['AvgFrequency'] > 30) {
-                            echo "💎 These customers are 'Recent Buyers' and could become long-term loyal customers with proper incentives.";
-                        } else {
-                            echo "🟡 This cluster represents a balanced mix of customer behaviors, requiring tailored engagement strategies.";
-                        }
+    <div class="container dashboard-container">
+        <h2 class="text-center my-4">Customer Segmentation (<?php echo strtoupper($segmentation); ?>)</h2>
+        <!-- Table Card -->
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-hover table-dark">
+                    <thead>
+                        <tr>
+                            <th><a href="javascript:sortTable('CustomerID')" class="text-white">CustomerID</a></th>
+                            <?php if ($segmentation == 'rfm') { ?>
+                                <th><a href="javascript:sortTable('Recency')" class="text-white">Recency (days)</a></th>
+                                <th><a href="javascript:sortTable('Frequency')" class="text-white">Frequency</a></th>
+                                <th><a href="javascript:sortTable('Monetary')" class="text-white">Monetary ($)</a></th>
+                            <?php } else { ?>
+                                <th><a href="javascript:sortTable('Length')" class="text-white">Length (days)</a></th>
+                                <th><a href="javascript:sortTable('Recency')" class="text-white">Recency (days)</a></th>
+                                <th><a href="javascript:sortTable('Frequency')" class="text-white">Frequency</a></th>
+                                <th><a href="javascript:sortTable('Monetary')" class="text-white">Monetary ($)</a></th>
+                                <th><a href="javascript:sortTable('Periodicity')" class="text-white">Periodicity (days)</a></th>
+                            <?php } ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php while ($row = $result->fetch_assoc()) {
+                            $jsonDetails = htmlspecialchars(json_encode($row), ENT_QUOTES, 'UTF-8');
                         ?>
-                    </p>
-                </div>
-            </div>
-        <?php } ?>
-
-        <h4>LRFMP Cluster Interpretations</h4>
-<?php if (!empty($lrfmp_cluster_data)) { ?>
-    <?php foreach ($lrfmp_cluster_data as $cluster => $data) { ?>
-        <div class="card mb-3">
-            <div class="card-body">
-                <h5>Cluster <?php echo $cluster; ?> (LRFMP)</h5>
-                <p><strong>Length (Avg):</strong> <?php echo $data['AvgLength']; ?> days</p>
-                <p><strong>Recency (Avg):</strong> <?php echo $data['AvgRecency']; ?> days</p>
-                <p><strong>Frequency (Avg):</strong> <?php echo $data['AvgFrequency']; ?> transactions</p>
-                <p><strong>Monetary (Avg):</strong> $<?php echo number_format($data['AvgMonetary'], 2); ?></p>
-                <p><strong>Periodicity (Avg):</strong> <?php echo $data['AvgPeriodicity']; ?> days</p>
-
-                <p><strong>Interpretation:</strong> 
-                    <?php
-                    if ($data['AvgLength'] > 365 && $data['AvgRecency'] > 150 && $data['AvgFrequency'] < 10) {
-                        echo "⚠️ This group represents 'Long-Time Dormant Customers'. They have been inactive for a long time and need strong incentives to return.";
-                    } elseif ($data['AvgLength'] < 100 && $data['AvgRecency'] < 30 && $data['AvgFrequency'] > 50) {
-                        echo "🎯 These are 'New Engaged Customers' who have started buying recently and frequently.";
-                    } elseif ($data['AvgPeriodicity'] < 10 && $data['AvgMonetary'] > 5000) {
-                        echo "💰 These are 'High-Spending Frequent Buyers'. They purchase often and spend significantly.";
-                    } elseif ($data['AvgRecency'] < 60 && $data['AvgFrequency'] > 40) {
-                        echo "🔥 These customers are 'Active Repeat Buyers' and should be given loyalty rewards.";
-                    } else {
-                        echo "🟠 These customers exhibit mixed behavior and require further segmentation.";
-                    }
-                    ?>
-                </p>
+                        <tr onclick="showCustomerDetails(this)" data-details='<?php echo $jsonDetails; ?>'>
+                            <td><?php echo $row['CustomerID']; ?></td>
+                            <?php if ($segmentation == 'rfm') { ?>
+                                <td><?php echo $row['Recency']; ?></td>
+                                <td><?php echo $row['Frequency']; ?></td>
+                                <td>$<?php echo number_format($row['Monetary'], 2); ?></td>
+                            <?php } else { ?>
+                                <td><?php echo $row['Length']; ?></td>
+                                <td><?php echo $row['Recency']; ?></td>
+                                <td><?php echo $row['Frequency']; ?></td>
+                                <td>$<?php echo number_format($row['Monetary'], 2); ?></td>
+                                <td><?php echo number_format($row['Periodicity'], 2); ?></td>
+                            <?php } ?>
+                        </tr>
+                        <?php } ?>
+                    </tbody>
+                </table>
             </div>
         </div>
-    <?php } ?>
-<?php } else { ?>
-    <p>No LRFMP cluster data found.</p>
-<?php } ?>
 
+        <!-- Modal Card -->
+        <div class="modal fade" id="detailsModal" tabindex="-1" aria-labelledby="detailsModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="detailsModalLabel">Customer Details &amp; Insights</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <table class="table table-bordered table-dark">
+                            <tr>
+                                <th>CustomerID</th>
+                                <td id="modalCustomerID"></td>
+                            </tr>
+                            <?php if ($segmentation == 'rfm') { ?>
+                                <tr>
+                                    <th>Recency</th>
+                                    <td id="modalMetric1"></td>
+                                </tr>
+                                <tr>
+                                    <th>Frequency</th>
+                                    <td id="modalMetric2"></td>
+                                </tr>
+                                <tr>
+                                    <th>Monetary</th>
+                                    <td id="modalMetric3"></td>
+                                </tr>
+                            <?php } else { ?>
+                                <tr>
+                                    <th>Length</th>
+                                    <td id="modalMetric1"></td>
+                                </tr>
+                                <tr>
+                                    <th>Recency</th>
+                                    <td id="modalMetric2"></td>
+                                </tr>
+                                <tr>
+                                    <th>Frequency</th>
+                                    <td id="modalMetric3"></td>
+                                </tr>
+                                <tr>
+                                    <th>Monetary</th>
+                                    <td id="modalMetric4"></td>
+                                </tr>
+                                <tr>
+                                    <th>Periodicity</th>
+                                    <td id="modalMetric5"></td>
+                                </tr>
+                                <tr>
+                                    <th>Country</th>
+                                    <td id="modalCountry"></td>
+                                </tr>
+                            <?php } ?>
+                            <tr>
+                                <th>Cluster Label</th>
+                                <td id="modalStatus"></td>
+                            </tr>
+                            <tr>
+                                <th>DBSCAN Status</th>
+                                <td id="modalDBSCANStatus"></td>
+                            </tr>
+                            <tr>
+                                <th>DBSCAN Insights</th>
+                                <td id="modalDBSCANInsights"></td>
+                            </tr>
+                            <tr>
+                                <th>DBSCAN Suggestions</th>
+                                <td id="modalDBSCANSuggestions"></td>
+                            </tr>
+                            <tr>
+                                <th>Insights</th>
+                                <td id="modalInsights"></td>
+                            </tr>
+                            <tr>
+                                <th>Suggestions</th>
+                                <td id="modalSuggestions"></td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div> <!-- /dashboard-container -->
 
-    </div>
+    <!-- External JS Files for Insights -->
+    <script src="includes/js/insights.js"></script>
+    <script src="includes/js/dbscan.js"></script>
+    <script>
+        function reloadPage() {
+            let seg = document.getElementById('segmentation').value;
+            let comb = document.getElementById('combination').value;
+            let country = document.getElementById('country').value;
+            let search = document.getElementById('search').value;
+            window.location.href = "?segmentation=" + seg + "&combination=" + comb + "&country=" + country + "&search=" + search;
+        }
 
+        function showCustomerDetails(rowElem) {
+            let details = JSON.parse(rowElem.getAttribute("data-details"));
+
+            let clusterVal = details["<?php echo $clusterCol; ?>"];
+            let statusText = (clusterVal === "0") ? "Dormant" : (clusterVal === "1") ? "Active" : "Loyal";
+            document.getElementById("modalStatus").innerText = statusText;
+
+            document.getElementById("modalCustomerID").innerText = details.CustomerID;
+            let seg = "<?php echo $segmentation; ?>";
+
+            if (seg === "rfm") {
+                document.getElementById("modalMetric1").innerText = "Recency: " + details.Recency + " days";
+                document.getElementById("modalMetric2").innerText = "Frequency: " + details.Frequency;
+                document.getElementById("modalMetric3").innerText = "Monetary: $" + parseFloat(details.Monetary).toFixed(2);
+            } else {
+                document.getElementById("modalMetric1").innerText = "Length: " + details.Length + " days";
+                document.getElementById("modalMetric2").innerText = "Recency: " + details.Recency + " days";
+                document.getElementById("modalMetric3").innerText = "Frequency: " + details.Frequency;
+                document.getElementById("modalMetric4").innerText = "Monetary: $" + parseFloat(details.Monetary).toFixed(2);
+                document.getElementById("modalMetric5").innerText = "Periodicity: " + parseFloat(details.Periodicity).toFixed(2) + " days";
+                if (details.Country) {
+                    document.getElementById("modalCountry").innerText = details.Country;
+                }
+            }
+
+            var kmeansResult = generateKMeansInsights(details, seg);
+            document.getElementById("modalInsights").innerText = kmeansResult.insights;
+            document.getElementById("modalSuggestions").innerText = kmeansResult.suggestions;
+
+            var dbscanResult = generateDBSCANInsights(details, seg, "<?php echo $flagCol; ?>");
+            document.getElementById("modalDBSCANStatus").innerText = dbscanResult.status;
+            document.getElementById("modalDBSCANInsights").innerText = dbscanResult.insights;
+            document.getElementById("modalDBSCANSuggestions").innerText = dbscanResult.suggestions;
+
+            let myModal = new bootstrap.Modal(document.getElementById('detailsModal'));
+            myModal.show();
+        }
+
+        function sortTable(column) {
+            let currentUrl = new URL(window.location.href);
+            let currentOrder = currentUrl.searchParams.get("order");
+            let newOrder = (currentOrder === "asc") ? "desc" : "asc";
+            currentUrl.searchParams.set("sort", column);
+            currentUrl.searchParams.set("order", newOrder);
+            window.location.href = currentUrl.href;
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
 </body>
-
 </html>
-
-<?php $conn->close(); ?>
+<?php
+$conn->close();
+?>

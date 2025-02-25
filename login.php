@@ -1,33 +1,36 @@
 <?php
 session_start();
-$servername = "localhost";
-$username = "root";
-$password = "";
-$dbname = "retail_db";
-
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
+include "includes/db_connection.php";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $user = $_POST['username'];
-    $pass = md5($_POST['password']); 
+    $username = trim($_POST['username']);
+    $password = trim($_POST['password']);
 
-    $result = $conn->query("SELECT id, access_level FROM users WHERE username='$user' AND password='$pass'");
-    if ($result->num_rows == 1) {
-        $row = $result->fetch_assoc();
-        $_SESSION['user_id'] = $row['id'];
-        $_SESSION['access_level'] = $row['access_level'];
-        header("Location: index.php");
+    // Prepare statement to get the hashed password
+    $stmt = $conn->prepare("SELECT id, password FROM users WHERE username = ?");
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    $stmt->store_result();
+    $stmt->bind_result($id, $hashed_password);
+    $stmt->fetch();
+
+    // Verify the password
+    if ($stmt->num_rows > 0 && password_verify($password, $hashed_password)) {
+        $_SESSION['user_id'] = $id;
+        $_SESSION['username'] = $username;
+        header("Location: index.php"); // Redirect to dashboard
+        exit();
     } else {
-        echo "Invalid username or password";
+        echo "<p style='color: red;'>Invalid username or password.</p>";
     }
+
+    $stmt->close();
 }
 ?>
 
-<form method="post">
-    <input type="text" name="username" placeholder="Username" required>
-    <input type="password" name="password" placeholder="Password" required>
+<!-- Login Form -->
+<form method="POST">
+    <input type="text" name="username" placeholder="Username" required><br>
+    <input type="password" name="password" placeholder="Password" required><br>
     <button type="submit">Login</button>
 </form>

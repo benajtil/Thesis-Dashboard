@@ -1,30 +1,47 @@
 <?php
-$servername = "localhost";
-$username = "root";
-$password = "";
-$dbname = "retail_db";
+session_start();
+include "includes/db_connection.php";
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit();
 }
 
-$salesQuery = $conn->query("SELECT SUM(total_price) AS total_sales FROM cleaned_transactions");
+
+$query = $conn->query("
+    SELECT 
+        DAYNAME(invoice_date) AS order_day, 
+        COUNT(*) AS total_orders, 
+        SUM(total_price) AS total_spent
+    FROM transactions 
+    GROUP BY order_day
+    ORDER BY FIELD(order_day, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')
+");
+$days = [];
+$orders = [];
+$spending = [];
+
+while ($row = $query->fetch_assoc()) {
+    $days[] = $row['order_day'];
+    $orders[] = $row['total_orders'];
+    $spending[] = $row['total_spent'];
+}
+
+
+$salesQuery = $conn->query("SELECT SUM(Monetary) AS total_sales FROM customer_analysis");
 $totalSales = $salesQuery->fetch_assoc()['total_sales'];
 
 $productQuery = $conn->query("SELECT COUNT(DISTINCT product_name) AS total_products FROM cleaned_transactions");
 $totalProducts = $productQuery->fetch_assoc()['total_products'];
 
-$customersQuery = $conn->query("SELECT COUNT(DISTINCT customer_id) AS total_customers FROM cleaned_transactions");
+$customersQuery = $conn->query("SELECT COUNT(DISTINCT customerId) AS total_customers FROM customer_analysis WHERE customerId > 0");
 $totalCustomers = $customersQuery->fetch_assoc()['total_customers'];
 
-// Total Cancelled Orders
-$cancelledQuery = $conn->query("SELECT COUNT(*) AS cancelled_orders, SUM(total_price) AS cancelled_amount FROM transactions WHERE invoice_no LIKE 'C%'");
-$cancelledData = $cancelledQuery->fetch_assoc();
-$totalCancelledOrders = $cancelledData['cancelled_orders'];
-$totalCancelledAmount = $cancelledData['cancelled_amount'];
+$countryQuery = $conn->query("SELECT COUNT(DISTINCT country) AS total_country FROM cleaned_transactions");
+$totalCountry = $countryQuery->fetch_assoc()['total_country'];
 
-// Total Refunded Orders
+
 $refundedQuery = $conn->query("SELECT COUNT(*) AS refunded_orders, SUM(total_price) AS refunded_amount FROM transactions WHERE quantity < 0");
 $refundedData = $refundedQuery->fetch_assoc();
 $totalRefundedOrders = $refundedData['refunded_orders'];
@@ -33,13 +50,15 @@ $totalRefundedAmount = $refundedData['refunded_amount'];
 $conn->close();
 ?>
 
+<?php include 'includes/navbar.php'; ?>
+
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Dashboard</title>
+
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -49,10 +68,31 @@ $conn->close();
 
 
     <style>
-         body {
-            background: #f4f6f9;
-            font-family: Arial, sans-serif;
+
+        body {
+            background-color: #181B23;
+            color: #E2E8F0;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
         }
+        a, a:hover, a:focus, a:active {
+            text-decoration: none;
+            color: inherit;
+        }
+        
+
+        .navbar {
+            background-color: #1F2029;
+            border-bottom: 1px solid #2D2F36;
+        }
+        .navbar-brand, .nav-link {
+            color: #E2E8F0 !important;
+        }
+        .nav-link:hover {
+            color: #63B3ED !important;
+        }
+
 
         .dashboard-container {
             max-width: 1200px;
@@ -60,134 +100,174 @@ $conn->close();
             padding: 20px;
         }
 
+
         .card {
-            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.1);
+            background-color: #1F2029;
+            border: none;
+            border-radius: 8px;
             margin-bottom: 20px;
-            padding: 15px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
         }
+        .card h5 {
+            margin-bottom: 15px;
+            color: #A0AEC0;
+        }
+
 
         .info-card {
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            color: white;
+            border-radius: 8px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            background-color: #2D2F36;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
-
         .info-card h3 {
             font-size: 24px;
             margin-bottom: 5px;
+            color: #E2E8F0;
+        }
+        .info-card p {
+            color: #A0AEC0;
+            margin: 0;
         }
 
-        .blue {
-            background-color: #007bff;
-        }
-
-        .green {
-            background-color: #28a745;
-        }
-
-        .yellow {
-            background-color: #ffc107;
-        }
-
-        .red {
-            background-color: #dc3545;
-        }
-
-        .orange {
-            background-color: #ff5733;
-        }
-
-        .purple {
-            background-color: #6f42c1;
-        }
 
         canvas {
-            max-height: 250px;
+            width: 100% !important;
+            max-height: 300px;
+        }
+
+
+        .text-center {
+            text-align: center;
+        }
+        .my-4 {
+            margin-top: 1.5rem !important;
+            margin-bottom: 1.5rem !important;
+        }
+
+
+        .chart-container {
+            position: relative;
+            height: 300px;
         }
     </style>
 </head>
 
 <body>
 
+    <!-- <nav class="navbar navbar-expand-lg">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">My Dashboard</a>
+            ...
+        </div>
+    </nav> -->
+
     <div class="container dashboard-container">
         <h2 class="text-center my-4">Admin Dashboard</h2>
 
-        <!-- Stats Cards -->
-        <div class="row">
+
+        <div class="row g-3">
             <div class="col-md-3">
-                <div class="info-card blue">
+                <div class="info-card">
                     <h3>$<?php echo number_format($totalSales, 2); ?></h3>
                     <p>Total Sales</p>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="info-card green">
+                <div class="info-card">
                     <h3><?php echo number_format($totalProducts); ?></h3>
                     <p>Total Products</p>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="info-card yellow">
+                <div class="info-card">
                     <h3><?php echo number_format($totalCustomers); ?></h3>
                     <p>Total Customers</p>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="info-card red">
-                    <h3><?php echo number_format($totalCancelledOrders); ?></h3>
-                    <p>Cancelled Orders (Amount: $<?php echo number_format($totalCancelledAmount, 2); ?>)</p>
+                <div class="info-card">
+                    <h3><?php echo number_format($totalCountry); ?></h3>
+                    <p>Total Countries</p>
                 </div>
             </div>
-            <div class="row">
-                <div class="col-md-3">
-                    <div class="info-card orange">
-                        <h3><?php echo number_format($totalRefundedOrders); ?></h3>
-                        <p>Refunded Orders (Amount: $<?php echo number_format($totalRefundedAmount, 2); ?>)</p>
+        </div>
+
+        <div class="row g-3 mt-2">
+            <div class="col-md-3">
+                <div class="info-card">
+                    <h3><?php echo number_format($totalRefundedOrders); ?></h3>
+                    <p>Refunded ( $<?php echo number_format($totalRefundedAmount, 2); ?> )</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="card">
+                    <h5>Sales Over Time</h5>
+                    <div class="chart-container">
+                        <canvas id="salesChart"></canvas>
                     </div>
                 </div>
-                
             </div>
-
+            <div class="col-md-6">
+                <div class="card">
+                    <h5>Weekly Orders & Spending</h5>
+                    <div class="chart-container">
+                        <canvas id="weeklyOrdersChart"></canvas>
+                    </div>
+                </div>
+            </div>
         </div>
 
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="card">
+                    <h5>Top 10 Best-Selling Products</h5>
+                    <div class="chart-container">
+                        <canvas id="productChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <h5>Top 10 Countries by Quantity Ordered</h5>
+                    <div class="chart-container">
+                        <canvas id="topOrdersChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
 
+        <!-- Map -->
         <div class="card">
-            <h5>📈 Sales Over Time</h5>
-            <canvas id="salesChart"></canvas>
+            <h5>Country Overview</h5>
+            <div id="customerMap" style="width: 100%; height: 400px;"></div>
         </div>
 
-        <div class="row">
-
+        <div class="row g-3">
             <div class="col-md-6">
                 <div class="card">
-                    <h5>🏆 Top 10 Best-Selling Products</h5>
-                    <canvas id="productChart"></canvas>
+                    <h5>Top 10 Countries by Spending</h5>
+                    <div class="chart-container">
+                        <canvas id="topSpendingChart"></canvas>
+                    </div>
                 </div>
             </div>
             <div class="col-md-6">
                 <div class="card">
-                    <h5>📦 Top 10 Countries by Quantity Ordered</h5>
-                    <canvas id="topOrdersChart"></canvas>
-                </div>
-            </div>
-        </div>
-        <div class="card">
-            <h5>🌍 Country</h5>
-            <div id="customerMap" style="width: 100%; height: 500px;"></div>
-        </div>
-
-        <div class="row">
-            <div class="col-md-6">
-                <div class="card">
-                    <h5>🌍 Top 10 Countries by Spending</h5>
-                    <canvas id="topSpendingChart"></canvas>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <h5>📉 Least Ordered Countries</h5>
-                    <canvas id="leastOrdersChart"></canvas>
+                    <h5>Least Ordered Countries</h5>
+                    <div class="chart-container">
+                        <canvas id="leastOrdersChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -195,148 +275,178 @@ $conn->close();
 
 
     <script>
+        Chart.defaults.color = "#E2E8F0";
+        Chart.defaults.borderColor = "rgba(255,255,255,0.1)";
+        
         document.addEventListener("DOMContentLoaded", async function() {
             async function loadCustomerMap() {
-                try {
-                    const response = await fetch("includes/country.php"); // Fetch country data
-                    const data = await response.json();
-
-                    let countryColors = {};
-                    let markers = [];
-
-                    for (const country in data) {
-                        const orders = data[country].total_orders;
-                        const spent = data[country].total_spent;
-
-                        let color = "#9e9e9e"; // Default (Casual Buyer)
-                        if (spent > 200000) color = "#FF5733"; // VIP Customers (Red)
-                        else if (orders > 100) color = "#36A2EB"; // Loyal Customers (Blue)
-
-                        countryColors[country] = color;
-                    }
-
-                    // Initialize jsVectorMap
-                    new jsVectorMap({
-                        selector: "#customerMap",
-                        map: "world",
-                        backgroundColor: "#f4f6f9",
-                        regionStyle: {
-                            initial: {
-                                fill: "#d1d1d1"
-                            },
-                            hover: {
-                                fill: "#f4a261"
-                            }
-                        },
-                        series: {
-                            regions: [{
-                                attribute: "fill",
-                                scale: ["#9e9e9e", "#36A2EB", "#FF5733"],
-                                values: countryColors
-                            }]
-                        },
-                        onRegionTipShow: function(event, label, code) {
-                            if (data[code]) {
-                                let details = `
-                        <strong>${label.html()}</strong><br>
-                        💰 Total Spent: $${data[code].total_spent.toLocaleString()}<br>
-                        📦 Orders: ${data[code].total_orders} <br>
-                        🔥 Segment: ${data[code].segment}
-                    `;
-                                label.html(details);
-                            }
-                        }
-                    });
-
-                } catch (error) {
-                    console.error("Customer Map Error:", error);
-                }
-            }
-
-            loadCustomerMap();
-            async function loadSalesChart() {
     try {
-        const response = await fetch("includes/salesMonths.php"); // Fetch cleaned data
+        const response = await fetch("includes/country.php");
         const data = await response.json();
 
-        if (!data || !Array.isArray(data) || data.length === 0) {
-            console.error("No data received for stock chart.");
-            return;
+        const continentColors = {
+            "North America": "#36A2EB",
+            "South America": "#FF6384",
+            "Europe":        "#FFCE56",
+            "Africa":        "#4BC0C0",
+            "Asia":          "#9966FF",
+            "Oceania":       "#FF9F40",
+            "Unknown":       "#757575"
+        };
+
+        let countryColors = {};
+        let countryContinents = {};
+
+        for (const isoCode in data) {
+            const continent = data[isoCode].continent || "Unknown";
+            const color = continentColors[continent] || "#757575";
+            countryColors[isoCode] = color;
+            countryContinents[isoCode] = continent;
         }
 
-        const months = data.map(entry => entry.month);
-        const totalSales = data.map(entry => entry.total_sales);
-        const cancelledSales = data.map(entry => entry.cancelled_sales);
-        const refundedSales = data.map(entry => entry.refunded_sales);
-
-        const ctx = document.getElementById("salesChart").getContext("2d");
-
-        const gradient1 = ctx.createLinearGradient(0, 0, 0, 400);
-        gradient1.addColorStop(0, "rgba(0, 123, 255, 0.6)");
-
-
-        const gradient2 = ctx.createLinearGradient(0, 0, 0, 400);
-        gradient2.addColorStop(0, "rgba(255, 99, 132, 0.6)");
-
-
-        const gradient3 = ctx.createLinearGradient(0, 0, 0, 400);
-        gradient3.addColorStop(0, "rgba(255, 205, 86, 0.6)");
-
-
-        new Chart(ctx, {
-            type: "line",
-            data: {
-                labels: months,
-                datasets: [
-                    {
-                        label: "Total Sales ($)",
-                        data: totalSales,
-                        borderColor: "#007bff",
-                        borderWidth: 3,
-                        fill: false,
-                        tension: 0.3
-                    },
-                    {
-                        label: "Cancelled Orders ($)",
-                        data: cancelledSales,
-                        borderColor: "#FF6384",
-                        borderWidth: 3,
-                        fill: false,
-                        tension: 0.3
-                    },
-                    {
-                        label: "Refunded Orders ($)",
-                        data: refundedSales,
-                        borderColor: "#FFCE56",
-
-                        borderWidth: 3,
-                        fill: false,
-                        tension: 0.3
-                    }
-                ]
+        new jsVectorMap({
+            selector: "#customerMap",
+            map: "world",
+            backgroundColor: "rgba(255, 255, 255, 0.32)",
+            regionStyle: {
+                initial: { fill: "#555555" },
+                hover: { fill: "#888888" }
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: "top" },
-                    tooltip: { enabled: true }
-                },
-                scales: {
-                    x: { title: { display: true, text: "Months" } },
-                    y: { title: { display: true, text: "Sales ($)" }, beginAtZero: false }
+            series: {
+                regions: [{
+                    attribute: "fill",
+                    scale: Object.values(continentColors),
+                    values: countryColors
+                }]
+            },
+            onRegionTipShow: function(event, label, code) {
+                if (data[code]) {
+                    const info = data[code];
+                    label.html(`
+                        <strong>${label.html()}</strong><br>
+                        🌍 Continent: ${countryContinents[code]}<br>
+                        💰 Total Spent: $${info.total_spent.toLocaleString()}<br>
+                        📦 Orders: ${info.total_orders}
+                    `);
                 }
             }
         });
-
     } catch (error) {
-        console.error("Sales Chart Error:", error);
+        console.error("Customer Map Error:", error);
     }
 }
 
-loadSalesChart();
+loadCustomerMap();
+            async function loadSalesChart() {
+                try {
+                    const response = await fetch("includes/salesMonths.php");
+                    const data = await response.json();
 
+                    if (!data || !Array.isArray(data) || data.length === 0) {
+                        console.error("No data received for sales chart.");
+                        return;
+                    }
 
+                    const months = data.map(entry => entry.month);
+                    const totalSales = data.map(entry => entry.total_sales);
+                    const refundedSales = data.map(entry => entry.refunded_sales);
+
+                    const ctx = document.getElementById("salesChart").getContext("2d");
+
+                    new Chart(ctx, {
+                        type: "line",
+                        data: {
+                            labels: months,
+                            datasets: [
+                                {
+                                    label: "Total Sales ($)",
+                                    data: totalSales,
+                                    borderColor: "#63B3ED",
+                                    borderWidth: 3,
+                                    fill: false,
+                                    tension: 0.3
+                                },
+                                {
+                                    label: "Refunded Orders ($)",
+                                    data: refundedSales,
+                                    borderColor: "#F6AD55",
+                                    borderWidth: 3,
+                                    fill: false,
+                                    tension: 0.3
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { position: "top" },
+                                tooltip: { enabled: true }
+                            },
+                            scales: {
+                                x: {
+                                    title: { display: true, text: "Months" }
+                                },
+                                y: {
+                                    title: { display: true, text: "Sales ($)" },
+                                    beginAtZero: false
+                                }
+                            }
+                        }
+                    });
+                } catch (error) {
+                    console.error("Sales Chart Error:", error);
+                }
+            }
+            loadSalesChart();
+
+            // Load Weekly Orders & Spending
+            var ctxWeekly = document.getElementById("weeklyOrdersChart").getContext("2d");
+            new Chart(ctxWeekly, {
+                type: "line",
+                data: {
+                    labels: <?php echo json_encode($days); ?>,
+                    datasets: [
+                        {
+                            label: "Total Orders",
+                            data: <?php echo json_encode($orders); ?>,
+                            borderColor: "#3182CE",
+                            backgroundColor: "rgba(49, 130, 206, 0.2)",
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        },
+                        {
+                            label: "Total Spending ($)",
+                            data: <?php echo json_encode($spending); ?>,
+                            borderColor: "#E53E3E",
+                            backgroundColor: "rgba(229, 62, 62, 0.2)",
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: "top" },
+                        tooltip: { enabled: true }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: "Weekdays" }
+                        },
+                        y: {
+                            title: { display: true, text: "Orders & Spending" },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // Load Top Products Chart
             async function loadTopProductsChart() {
                 try {
                     const response = await fetch("includes/productData.php");
@@ -352,12 +462,7 @@ loadSalesChart();
 
                     const ctx = document.getElementById("productChart").getContext("2d");
 
-                    // ✅ Destroy existing chart instance if it exists
-                    if (window.topProductsChart instanceof Chart) {
-                        window.topProductsChart.destroy();
-                    }
-
-                    window.topProductsChart = new Chart(ctx, {
+                    new Chart(ctx, {
                         type: "doughnut",
                         data: {
                             labels: labels,
@@ -376,167 +481,158 @@ loadSalesChart();
                             maintainAspectRatio: false,
                             plugins: {
                                 legend: {
-                                    position: "right"
+                                    position: "right",
+                                    labels: { color: "#E2E8F0" }
+                                }
+                            }
+                        }
+                    });
+                } catch (error) {
+                    console.error("Top Products Chart Error:", error);
+                }
+            }
+            loadTopProductsChart();
+
+            // Load Country Charts
+            async function loadCountryCharts() {
+                try {
+                    const response = await fetch("includes/topCountries.php");
+                    const data = await response.json();
+
+                    // Top 10 Countries by Spending
+                    const topSpendingCtx = document.getElementById("topSpendingChart").getContext("2d");
+                    new Chart(topSpendingCtx, {
+                        type: "bar",
+                        data: {
+                            labels: data.top_spending.map(item => item.country),
+                            datasets: [{
+                                label: "Total Spent ($)",
+                                data: data.top_spending.map(item => item.total_spent),
+                                backgroundColor: data.top_spending.map(() => getRandomGradient()),
+                                borderRadius: 8
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: true }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    grid: { display: false },
+                                    ticks: { color: "#E2E8F0" }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    ticks: { color: "#E2E8F0" }
+                                }
+                            }
+                        }
+                    });
+
+                    // Top 10 Countries by Total Orders & Quantity
+                    const topOrdersCtx = document.getElementById("topOrdersChart").getContext("2d");
+                    new Chart(topOrdersCtx, {
+                        type: "bar",
+                        data: {
+                            labels: data.top_orders.map(item => item.country),
+                            datasets: [
+                                {
+                                    label: "Total Orders",
+                                    data: data.top_orders.map(item => item.total_orders),
+                                    backgroundColor: "#36A2EB"
+                                },
+                                {
+                                    label: "Total Quantity",
+                                    data: data.top_orders.map(item => item.total_quantity),
+                                    backgroundColor: "rgba(75, 192, 192, 0.5)"
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { position: "top", labels: { color: "#E2E8F0" } }
+                            },
+                            scales: {
+                                x: {
+                                    stacked: true,
+                                    grid: { display: false },
+                                    ticks: { color: "#E2E8F0" }
+                                },
+                                y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    ticks: { color: "#E2E8F0" }
+                                }
+                            }
+                        }
+                    });
+
+
+                    const leastOrdersCtx = document.getElementById("leastOrdersChart").getContext("2d");
+                    new Chart(leastOrdersCtx, {
+                        type: "line",
+                        data: {
+                            labels: data.least_orders.map(item => item.country),
+                            datasets: [
+                                {
+                                    label: "Total Orders",
+                                    data: data.least_orders.map(item => item.total_orders),
+                                    borderColor: "#FF9F40",
+                                    backgroundColor: "rgba(255, 159, 64, 0.2)",
+                                    borderWidth: 2,
+                                    pointRadius: 4,
+                                    pointStyle: "circle",
+                                    borderDash: [5, 5]
+                                },
+                                {
+                                    label: "Total Quantity",
+                                    data: data.least_orders.map(item => item.total_quantity),
+                                    borderColor: "#9966FF",
+                                    backgroundColor: "rgba(153, 102, 255, 0.2)",
+                                    borderWidth: 2,
+                                    pointRadius: 4,
+                                    pointStyle: "rectRounded"
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { position: "bottom", labels: { color: "#E2E8F0" } }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    grid: { display: true },
+                                    ticks: { color: "#E2E8F0" }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    ticks: { color: "#E2E8F0" }
                                 }
                             }
                         }
                     });
 
                 } catch (error) {
-                    console.error("Top Products Chart Error:", error);
+                    console.error("Country Chart Error:", error);
                 }
             }
-
-            loadTopProductsChart();
+            loadCountryCharts();
         });
 
-        async function loadCountryCharts() {
-            try {
-                const response = await fetch("includes/topCountries.php");
-                const data = await response.json();
-
-                // 🌍 **Top 10 Countries by Spending (Gradient Bar)**
-                const topSpendingCtx = document.getElementById("topSpendingChart").getContext("2d");
-                new Chart(topSpendingCtx, {
-                    type: "bar",
-                    data: {
-                        labels: data.top_spending.map(item => item.country),
-                        datasets: [{
-                            label: "Total Spent ($)",
-                            data: data.top_spending.map(item => item.total_spent),
-                            backgroundColor: data.top_spending.map(() => getRandomGradient()), // Unique gradient per bar
-                            borderRadius: 10
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            legend: {
-                                display: false
-                            },
-                            tooltip: {
-                                enabled: true
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: {
-                                    display: false
-                                }
-                            },
-                            x: {
-                                grid: {
-                                    display: false
-                                }
-                            }
-                        }
-                    }
-                });
-
-                // 📦 **Top 10 Countries by Total Orders & Quantity (Stacked Bar)**
-                const topOrdersCtx = document.getElementById("topOrdersChart").getContext("2d");
-                new Chart(topOrdersCtx, {
-                    type: "bar",
-                    data: {
-                        labels: data.top_orders.map(item => item.country),
-                        datasets: [{
-                            label: "Total Orders",
-                            data: data.top_orders.map(item => item.total_orders),
-                            backgroundColor: "#36A2EB"
-                        }, {
-                            label: "Total Quantity Ordered",
-                            data: data.top_orders.map(item => item.total_quantity),
-                            backgroundColor: "rgba(75, 192, 192, 0.5)"
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            legend: {
-                                position: "top"
-                            }
-                        },
-                        scales: {
-                            x: {
-                                stacked: true,
-                                grid: {
-                                    display: false
-                                }
-                            },
-                            y: {
-                                stacked: true,
-                                beginAtZero: true
-                            }
-                        }
-                    }
-                });
-
-                // 📉 **Bottom 10 Least Ordered Countries (Dotted Line Chart)**
-                const leastOrdersCtx = document.getElementById("leastOrdersChart").getContext("2d");
-                new Chart(leastOrdersCtx, {
-                    type: "line",
-                    data: {
-                        labels: data.least_orders.map(item => item.country),
-                        datasets: [{
-                            label: "Total Orders",
-                            data: data.least_orders.map(item => item.total_orders),
-                            borderColor: "#FF9F40",
-                            backgroundColor: "rgba(255, 159, 64, 0.2)",
-                            borderWidth: 2,
-                            pointRadius: 5,
-                            pointStyle: "circle",
-                            borderDash: [5, 5] // Creates a dotted line effect
-                        }, {
-                            label: "Total Quantity Ordered",
-                            data: data.least_orders.map(item => item.total_quantity),
-                            borderColor: "#9966FF",
-                            backgroundColor: "rgba(153, 102, 255, 0.2)",
-                            borderWidth: 2,
-                            pointRadius: 5,
-                            pointStyle: "rectRounded"
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            legend: {
-                                position: "bottom"
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: {
-                                    display: true
-                                }
-                            },
-                            x: {
-                                grid: {
-                                    display: false
-                                }
-                            }
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Country Chart Error:", error);
-            }
-        }
-
-        loadCountryCharts();
-
-        // Function to generate random gradient colors
         function getRandomGradient() {
             const ctx = document.createElement("canvas").getContext("2d");
-            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
             gradient.addColorStop(0, getRandomColor());
             gradient.addColorStop(1, getRandomColor());
             return gradient;
         }
 
-        // Function to generate random colors
         function getRandomColor() {
             const letters = "0123456789ABCDEF";
             let color = "#";
@@ -546,7 +642,5 @@ loadSalesChart();
             return color;
         }
     </script>
-
 </body>
-
 </html>
